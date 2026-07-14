@@ -36,6 +36,10 @@ const PLATFORMS = {
   TikTok: "TT",
 };
 
+/* real post dimensions per platform — previews crop to these */
+const ASPECT = { Instagram: "1 / 1", LinkedIn: "1.91 / 1", X: "16 / 9", TikTok: "9 / 16" };
+const SIZE_HINT = { Instagram: "1080 × 1080", LinkedIn: "1200 × 627", X: "1600 × 900", TikTok: "1080 × 1920" };
+
 const STATUS = {
   draft: { label: "Draft", spine: "#9aa3c7", chipBg: "#eef0f9", chipText: "#5a6285" },
   pending: { label: "Awaiting review", spine: C.yellow, chipBg: "#fff7c2", chipText: "#7a6400" },
@@ -71,14 +75,14 @@ const WEEK_TREND = [
 let nextId = 100;
 
 export default function App() {
-  const [role, setRole] = useState("manager");
+  const [role, setRole] = useState(null); // null = signed out
   const [tab, setTab] = useState("plan");
   const [posts, setPosts] = useState(SEED_POSTS);
   const [openPost, setOpenPost] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [toast, setToast] = useState(null);
 
-  const user = USERS[role];
+  const user = role ? USERS[role] : null;
   const active = posts.find((p) => p.id === openPost) || null;
 
   const counts = useMemo(() => {
@@ -103,11 +107,18 @@ export default function App() {
     setOpenPost(null);
   };
 
+  const addNote = (id, text) => {
+    updatePost(id, {}, { by: role, text, at: "Just now" });
+    ping("Note added");
+  };
+
   const addPost = (draft) => {
     setPosts((ps) => [...ps, { id: nextId++, comments: [], metrics: null, status: "pending", ...draft }]);
     setShowNew(false);
     ping("Post submitted to " + USERS.client.name.split(" ")[0]);
   };
+
+  if (!role) return <Login onLogin={setRole} />;
 
   return (
     <div className="min-h-screen" style={{ background: C.bg, color: C.ink, fontFamily: "'Garet','Poppins',ui-sans-serif,system-ui,sans-serif" }}>
@@ -141,19 +152,14 @@ export default function App() {
             ))}
           </nav>
 
-          {/* role switcher — stands in for real auth */}
           <div className="flex items-center gap-2 order-2 sm:order-3">
-            <div className="flex rounded-md p-0.5" style={{ background: "#12277f", ...outline }}>
-              {["manager", "client"].map((r) => (
-                <button key={r} onClick={() => { setRole(r); setOpenPost(null); setShowNew(false); }}
-                  className="px-2.5 py-1 rounded text-xs font-bold capitalize transition-colors focus:outline-none"
-                  style={role === r ? { background: C.mint, color: C.ink } : { color: "#8fa0f0" }}>
-                  {r}
-                </button>
-              ))}
-            </div>
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ background: C.paper, color: C.blue, ...outline }}>{user.initials}</div>
+              style={{ background: C.paper, color: C.blue, ...outline }} title={user.name}>{user.initials}</div>
+            <button onClick={() => { setRole(null); setOpenPost(null); setShowNew(false); setTab("plan"); }}
+              className="px-2.5 py-1.5 rounded-md text-xs font-bold focus:outline-none"
+              style={{ background: "#12277f", color: "#cdd5ff", ...outline }}>
+              Sign out
+            </button>
           </div>
         </div>
       </header>
@@ -182,7 +188,9 @@ export default function App() {
 
       {active && (
         <ReviewModal post={active} role={role} onClose={() => setOpenPost(null)}
-          onDecide={decide} onResubmit={resubmit} onSubmit={submit} />
+          onDecide={decide} onResubmit={resubmit} onSubmit={submit}
+          onMedia={(id, m) => { updatePost(id, { media: m }); ping(m ? "Media updated" : "Media removed"); }}
+          onNote={addNote} />
       )}
       {showNew && <NewPostModal onCancel={() => setShowNew(false)} onCreate={addPost} />}
 
@@ -216,34 +224,118 @@ function StatusChip({ status }) {
   );
 }
 
-function MediaPreview({ media, compact }) {
+function MediaPreview({ media, compact, platform }) {
   if (!media) return null;
+
+  /* full previews crop to the platform's real post shape; vertical formats stay a sane height */
+  const tall = platform === "TikTok";
+  const frame = compact
+    ? { height: 64, width: "100%" }
+    : tall
+      ? { aspectRatio: ASPECT[platform], height: 300, margin: "0 auto" }
+      : { aspectRatio: (platform && ASPECT[platform]) || "16 / 9", width: "100%" };
+  const frameCls = "rounded-md overflow-hidden relative";
+  const border = { border: `1.5px solid ${C.ink}` };
+  const badge = !compact && platform && (
+    <span className="absolute bottom-1.5 right-1.5 text-[10px] font-semibold rounded px-1.5 py-0.5"
+      style={{ background: C.ink, color: C.paper, opacity: 0.9 }}>
+      {platform} · {SIZE_HINT[platform]}
+    </span>
+  );
+
   if (media.kind === "mock") {
     return (
-      <div className={`rounded-md flex items-center justify-center ${compact ? "h-16" : "h-40"}`}
-        style={{ background: `linear-gradient(135deg, ${media.from}, ${media.to})`, border: `1.5px solid ${C.ink}` }}>
+      <div className={`${frameCls} flex items-center justify-center`}
+        style={{ ...frame, ...border, background: `linear-gradient(135deg, ${media.from}, ${media.to})` }}>
         <span className={`font-semibold rounded px-2 py-0.5 ${compact ? "text-[10px]" : "text-xs"}`}
           style={{ background: C.ink, color: C.paper }}>
           {media.label}
         </span>
+        {badge}
       </div>
     );
   }
   if (media.kind === "image") {
-    return <img src={media.src} alt={media.name || "Post media"}
-      className={`rounded-md w-full object-cover ${compact ? "h-16" : "max-h-64"}`}
-      style={{ border: `1.5px solid ${C.ink}` }} />;
+    return (
+      <div className={frameCls} style={{ ...frame, ...border }}>
+        <img src={media.src} alt={media.name || "Post media"} className="w-full h-full object-cover" />
+        {badge}
+      </div>
+    );
   }
   if (media.kind === "video") {
     return compact ? (
-      <div className="rounded-md h-16 flex items-center justify-center" style={{ background: C.ink, border: `1.5px solid ${C.ink}` }}>
+      <div className="rounded-md h-16 flex items-center justify-center" style={{ background: C.ink, ...border }}>
         <span className="text-[10px] font-semibold" style={{ color: C.mint }}>▶ {media.name || "Video"}</span>
       </div>
     ) : (
-      <video src={media.src} controls className="rounded-md w-full max-h-64" style={{ background: C.ink, border: `1.5px solid ${C.ink}` }} />
+      <div className={frameCls} style={{ ...frame, ...border, background: C.ink }}>
+        <video src={media.src} controls className="w-full h-full object-contain" />
+        {badge}
+      </div>
     );
   }
   return null;
+}
+
+/* upload / replace / remove control — used in New post and when editing an existing post */
+function MediaField({ media, onChange, platform }) {
+  const [err, setErr] = useState(null);
+  const MAX_MB = 8;
+
+  const handleFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    if (f.size > MAX_MB * 1024 * 1024) {
+      setErr(`File is ${(f.size / 1048576).toFixed(1)} MB — the limit is ${MAX_MB} MB. Compress it and try again.`);
+      e.target.value = "";
+      return;
+    }
+    setErr(null);
+    if (f.type.startsWith("image/")) {
+      const r = new FileReader();
+      r.onload = () => onChange({ kind: "image", src: r.result, name: f.name });
+      r.readAsDataURL(f);
+    } else if (f.type.startsWith("video/")) {
+      onChange({ kind: "video", src: URL.createObjectURL(f), name: f.name });
+    } else {
+      setErr("That file type isn't supported. Upload an image (JPG, PNG, WebP) or a video (MP4, MOV).");
+    }
+    e.target.value = "";
+  };
+
+  return (
+    <div>
+      {!media ? (
+        <label className="block rounded-md p-4 text-center cursor-pointer"
+          style={{ border: `2px dashed ${C.blue}`, background: "#f7f9ff" }}>
+          <input type="file" accept="image/*,video/*" onChange={handleFile} className="sr-only" />
+          <span className="text-sm" style={{ color: "#5a6285" }}>
+            <span className="font-bold" style={{ color: C.blue, textDecoration: "underline", textDecorationColor: C.mint, textDecorationThickness: 3, textUnderlineOffset: 3 }}>Upload media</span> — image or video, up to 8 MB
+            {platform && <span className="block text-xs mt-0.5" style={{ color: "#8b93b8" }}>{platform} size: {SIZE_HINT[platform]}</span>}
+          </span>
+        </label>
+      ) : (
+        <div>
+          <MediaPreview media={media} platform={platform} />
+          <div className="flex items-center justify-between mt-1.5 gap-2">
+            <span className="text-xs truncate" style={{ color: "#5a6285" }}>{media.name || media.label || "Attached media"}</span>
+            <div className="flex gap-3 shrink-0">
+              <label className="text-xs font-bold cursor-pointer rounded px-1" style={{ color: C.blue }}>
+                <input type="file" accept="image/*,video/*" onChange={handleFile} className="sr-only" />
+                Replace
+              </label>
+              <button onClick={() => { onChange(null); setErr(null); }}
+                className="text-xs font-bold rounded px-1 focus:outline-none" style={{ color: "#b3123a" }}>
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {err && <div className="text-xs mt-1" style={{ color: "#b3123a" }}>{err}</div>}
+    </div>
+  );
 }
 
 /* ---------------- weekly plan board ---------------- */
@@ -429,7 +521,7 @@ function StatCard({ label, value, sub, accent }) {
 }
 
 /* ---------------- review modal ---------------- */
-function ReviewModal({ post, role, onClose, onDecide, onResubmit, onSubmit }) {
+function ReviewModal({ post, role, onClose, onDecide, onResubmit, onSubmit, onMedia, onNote }) {
   const [note, setNote] = useState("");
   const [needNote, setNeedNote] = useState(null);
 
@@ -459,7 +551,14 @@ function ReviewModal({ post, role, onClose, onDecide, onResubmit, onSubmit }) {
               className="text-xl leading-none px-1 rounded focus:outline-none" style={{ color: "#8b93b8" }}>×</button>
           </div>
 
-          {post.media && <div className="mt-3"><MediaPreview media={post.media} /></div>}
+          {role === "manager" && ["draft", "pending", "changes_requested"].includes(post.status) ? (
+            <div className="mt-3">
+              <div className="text-xs font-bold mb-1" style={{ color: "#5a6285" }}>Media</div>
+              <MediaField media={post.media} onChange={(m) => onMedia(post.id, m)} platform={post.platform} />
+            </div>
+          ) : (
+            post.media && <div className="mt-3"><MediaPreview media={post.media} platform={post.platform} /></div>
+          )}
 
           <div className="mt-3 rounded-md p-3 text-sm" style={{ background: C.bg, border: `1.5px solid #dde3ff` }}>{post.caption}</div>
 
@@ -480,6 +579,10 @@ function ReviewModal({ post, role, onClose, onDecide, onResubmit, onSubmit }) {
                 </div>
               ))}
             </div>
+          )}
+
+          {!(role === "client" && post.status === "pending") && (
+            <NoteBox onAdd={(t) => onNote(post.id, t)} />
           )}
 
           {role === "client" && post.status === "pending" && (
@@ -514,7 +617,7 @@ function ReviewModal({ post, role, onClose, onDecide, onResubmit, onSubmit }) {
 
           {role === "client" && post.status !== "pending" && (
             <div className="mt-5 text-sm rounded-md p-3" style={{ background: C.bg, color: "#5a6285" }}>
-              {post.status === "approved" && "You approved this post. It's scheduled to publish as planned."}
+              {post.status === "approved" && "You approved this post. It will publish automatically to the connected account at its scheduled time."}
               {post.status === "changes_requested" && "You requested changes. Maya will revise and resubmit."}
               {post.status === "declined" && "You declined this post. It won't be published."}
               {post.status === "draft" && "Still being drafted — you'll be notified when it's ready to review."}
@@ -540,7 +643,7 @@ function ReviewModal({ post, role, onClose, onDecide, onResubmit, onSubmit }) {
               {["pending", "approved", "declined"].includes(post.status) && (
                 <div className="text-sm rounded-md p-3" style={{ background: C.bg, color: "#5a6285" }}>
                   {post.status === "pending" && "Waiting on Daniel's review. Approval decisions belong to the client role."}
-                  {post.status === "approved" && "Approved and locked. It will publish as scheduled."}
+                  {post.status === "approved" && "Approved and locked. It will publish automatically to the connected account at its scheduled time."}
                   {post.status === "declined" && "Declined by the client — see feedback above before planning a replacement."}
                 </div>
               )}
@@ -560,28 +663,6 @@ function NewPostModal({ onCancel, onCreate }) {
   const [day, setDay] = useState(2);
   const [err, setErr] = useState(false);
   const [media, setMedia] = useState(null);
-  const [mediaErr, setMediaErr] = useState(null);
-
-  const MAX_MB = 8;
-  const handleFile = (e) => {
-    const f = e.target.files && e.target.files[0];
-    if (!f) return;
-    if (f.size > MAX_MB * 1024 * 1024) {
-      setMediaErr(`File is ${(f.size / 1048576).toFixed(1)} MB — the limit is ${MAX_MB} MB. Compress it and try again.`);
-      return;
-    }
-    setMediaErr(null);
-    if (f.type.startsWith("image/")) {
-      const r = new FileReader();
-      r.onload = () => setMedia({ kind: "image", src: r.result, name: f.name });
-      r.readAsDataURL(f);
-    } else if (f.type.startsWith("video/")) {
-      setMedia({ kind: "video", src: URL.createObjectURL(f), name: f.name });
-    } else {
-      setMediaErr("That file type isn't supported. Upload an image (JPG, PNG, WebP) or a video (MP4, MOV).");
-    }
-    e.target.value = "";
-  };
 
   const create = () => {
     if (!title.trim() || !caption.trim()) { setErr(true); return; }
@@ -609,28 +690,8 @@ function NewPostModal({ onCancel, onCreate }) {
           className="w-full p-2.5 text-sm mb-3 focus:outline-none" style={inputStyle} />
 
         <label className="block text-xs font-bold mb-1" style={labelStyle}>Media</label>
-        {!media ? (
-          <label className="block rounded-md p-4 text-center cursor-pointer mb-1"
-            style={{ border: `2px dashed ${C.blue}`, background: "#f7f9ff" }}>
-            <input type="file" accept="image/*,video/*" onChange={handleFile} className="sr-only" />
-            <span className="text-sm" style={{ color: "#5a6285" }}>
-              <span className="font-bold" style={{ color: C.blue, textDecoration: "underline", textDecorationColor: C.mint, textDecorationThickness: 3, textUnderlineOffset: 3 }}>Choose a file</span> — image or video, up to 8 MB
-            </span>
-          </label>
-        ) : (
-          <div className="relative mb-1">
-            <MediaPreview media={media} />
-            <div className="flex items-center justify-between mt-1.5">
-              <span className="text-xs truncate pr-2" style={{ color: "#5a6285" }}>{media.name}</span>
-              <button onClick={() => setMedia(null)}
-                className="text-xs font-bold shrink-0 rounded px-1 focus:outline-none" style={{ color: "#b3123a" }}>
-                Remove
-              </button>
-            </div>
-          </div>
-        )}
-        {mediaErr && <div className="text-xs mb-2" style={{ color: "#b3123a" }}>{mediaErr}</div>}
-        <div className="h-2" />
+        <MediaField media={media} onChange={setMedia} platform={platform} />
+        <div className="h-3" />
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
@@ -661,6 +722,99 @@ function NewPostModal({ onCancel, onCreate }) {
             Submit for review
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ---------------- add-a-note box (both roles, any status) ---------------- */
+function NoteBox({ onAdd }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="mt-4">
+      <div className="text-xs font-bold mb-1" style={{ color: "#5a6285" }}>Add a note</div>
+      <div className="flex gap-2">
+        <input value={text} onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onAdd(text.trim()); setText(""); } }}
+          placeholder="Share context, ideas, or questions — doesn't change the post's status"
+          className="flex-1 p-2.5 text-sm focus:outline-none"
+          style={{ border: `2px solid ${C.ink}`, borderRadius: 6 }} />
+        <button onClick={() => { if (text.trim()) { onAdd(text.trim()); setText(""); } }}
+          className="px-4 py-2 rounded-md text-sm font-bold focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
+          style={{ background: C.mint, color: C.ink, ...outline, ...hard(C.ink, 3) }}>
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- sign-in screen (demo accounts; real email auth comes with the backend) ---------------- */
+function Login({ onLogin }) {
+  const [email, setEmail] = useState("");
+  const [pickRole, setPickRole] = useState("manager");
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4"
+      style={{ background: C.blue, fontFamily: "'Garet','Poppins',ui-sans-serif,system-ui,sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Poppins:wght@400;500;600&display=swap');
+        .display { font-family: 'Neue Machina','Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif; }
+      `}</style>
+      <div className="w-full max-w-sm rounded-xl p-6"
+        style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `6px 6px 0 ${C.mint}` }}>
+        <div className="flex items-center gap-2.5 mb-1">
+          <div className="w-10 h-10 flex items-center justify-center rounded-md"
+            style={{ background: C.mint, border: `2px solid ${C.ink}`, boxShadow: `3px 3px 0 ${C.ink}` }}>
+            <span className="display font-extrabold" style={{ color: C.blue }}>AS</span>
+          </div>
+          <div>
+            <div className="display font-extrabold text-lg leading-tight" style={{ color: C.ink }}>Accession Solution</div>
+            <div className="text-xs" style={{ color: "#5a6285" }}>Social workspace</div>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-2.5">
+          <button onClick={() => onLogin("manager")}
+            className="w-full text-left p-3 rounded-md focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
+            style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.yellow}` }}>
+            <div className="text-sm font-bold" style={{ color: C.ink }}>Continue as Maya Torres</div>
+            <div className="text-xs" style={{ color: "#5a6285" }}>Social media manager — creates &amp; submits posts</div>
+          </button>
+          <button onClick={() => onLogin("client")}
+            className="w-full text-left p-3 rounded-md focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
+            style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.mint}` }}>
+            <div className="text-sm font-bold" style={{ color: C.ink }}>Continue as Daniel Cho</div>
+            <div className="text-xs" style={{ color: "#5a6285" }}>Founder — approves, declines, requests changes</div>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 my-4">
+          <div className="flex-1 h-px" style={{ background: "#dde3ff" }} />
+          <span className="text-[11px]" style={{ color: "#8b93b8" }}>or sign in with email</span>
+          <div className="flex-1 h-px" style={{ background: "#dde3ff" }} />
+        </div>
+
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email"
+          placeholder="you@company.com"
+          className="w-full p-2.5 text-sm mb-2 focus:outline-none"
+          style={{ border: `2px solid ${C.ink}`, borderRadius: 6, color: C.ink }} />
+        <select value={pickRole} onChange={(e) => setPickRole(e.target.value)}
+          className="w-full p-2.5 text-sm mb-3 focus:outline-none"
+          style={{ border: `2px solid ${C.ink}`, borderRadius: 6, color: C.ink }}>
+          <option value="manager">I'm the social media manager</option>
+          <option value="client">I'm the founder / client</option>
+        </select>
+        <button onClick={() => onLogin(pickRole)}
+          className="w-full px-4 py-2.5 rounded-md text-sm font-bold focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
+          style={{ background: C.blue, color: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.yellow}` }}>
+          Sign in
+        </button>
+
+        <p className="text-[11px] mt-3 text-center" style={{ color: "#8b93b8" }}>
+          Demo sign-in — real email accounts &amp; passwords arrive with the production build.
+        </p>
       </div>
     </div>
   );
