@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
+import { supabase } from "./supabaseClient";
 
 /* ------------------------------------------------------------------
    ACCESSION SOLUTION — social approval workspace
@@ -75,14 +76,40 @@ const WEEK_TREND = [
 let nextId = 100;
 
 export default function App() {
-  const [role, setRole] = useState(null); // null = signed out
+  const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
+  const [profile, setProfile] = useState(null);
+  const [profileError, setProfileError] = useState(null);
   const [tab, setTab] = useState("plan");
   const [posts, setPosts] = useState(SEED_POSTS);
   const [openPost, setOpenPost] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const [toast, setToast] = useState(null);
 
-  const user = role ? USERS[role] : null;
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) { setProfile(null); return; }
+    let cancelled = false;
+    setProfileError(null);
+    supabase.from("profiles").select("name, role, initials").eq("id", session.user.id).single()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) setProfileError(error.message);
+        else setProfile(data);
+      });
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const role = profile?.role ?? null;
+  const user = profile ? {
+    name: profile.name,
+    initials: profile.initials,
+    title: role === "manager" ? "Social media manager" : "Founder · Accession Solution",
+  } : null;
   const active = posts.find((p) => p.id === openPost) || null;
 
   const counts = useMemo(() => {
@@ -118,7 +145,10 @@ export default function App() {
     ping("Post submitted to " + USERS.client.name.split(" ")[0]);
   };
 
-  if (!role) return <Login onLogin={setRole} />;
+  if (session === undefined) return <Splash />;
+  if (!session) return <Login />;
+  if (profileError) return <NoAccess message={profileError} />;
+  if (!profile) return <Splash />;
 
   return (
     <div className="min-h-screen" style={{ background: C.bg, color: C.ink, fontFamily: "'Garet','Poppins',ui-sans-serif,system-ui,sans-serif" }}>
@@ -155,7 +185,7 @@ export default function App() {
           <div className="flex items-center gap-2 order-2 sm:order-3">
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
               style={{ background: C.paper, color: C.blue, ...outline }} title={user.name}>{user.initials}</div>
-            <button onClick={() => { setRole(null); setOpenPost(null); setShowNew(false); setTab("plan"); }}
+            <button onClick={() => { supabase.auth.signOut(); setOpenPost(null); setShowNew(false); setTab("plan"); }}
               className="px-2.5 py-1.5 rounded-md text-xs font-bold focus:outline-none"
               style={{ background: "#12277f", color: "#cdd5ff", ...outline }}>
               Sign out
@@ -750,11 +780,8 @@ function NoteBox({ onAdd }) {
   );
 }
 
-/* ---------------- sign-in screen (demo accounts; real email auth comes with the backend) ---------------- */
-function Login({ onLogin }) {
-  const [email, setEmail] = useState("");
-  const [pickRole, setPickRole] = useState("manager");
-
+/* ---------------- branded frame shared by sign-in / loading / no-access ---------------- */
+function AuthFrame({ shadow, children }) {
   return (
     <div className="min-h-screen flex items-center justify-center p-4"
       style={{ background: C.blue, fontFamily: "'Garet','Poppins',ui-sans-serif,system-ui,sans-serif" }}>
@@ -763,8 +790,8 @@ function Login({ onLogin }) {
         .display { font-family: 'Neue Machina','Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif; }
       `}</style>
       <div className="w-full max-w-sm rounded-xl p-6"
-        style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `6px 6px 0 ${C.mint}` }}>
-        <div className="flex items-center gap-2.5 mb-1">
+        style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `6px 6px 0 ${shadow}` }}>
+        <div className="flex items-center gap-2.5 mb-5">
           <div className="w-10 h-10 flex items-center justify-center rounded-md"
             style={{ background: C.mint, border: `2px solid ${C.ink}`, boxShadow: `3px 3px 0 ${C.ink}` }}>
             <span className="display font-extrabold" style={{ color: C.blue }}>AS</span>
@@ -774,48 +801,76 @@ function Login({ onLogin }) {
             <div className="text-xs" style={{ color: "#5a6285" }}>Social workspace</div>
           </div>
         </div>
-
-        <div className="mt-5 space-y-2.5">
-          <button onClick={() => onLogin("manager")}
-            className="w-full text-left p-3 rounded-md focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
-            style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.yellow}` }}>
-            <div className="text-sm font-bold" style={{ color: C.ink }}>Continue as Maya Torres</div>
-            <div className="text-xs" style={{ color: "#5a6285" }}>Social media manager — creates &amp; submits posts</div>
-          </button>
-          <button onClick={() => onLogin("client")}
-            className="w-full text-left p-3 rounded-md focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
-            style={{ background: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.mint}` }}>
-            <div className="text-sm font-bold" style={{ color: C.ink }}>Continue as Daniel Cho</div>
-            <div className="text-xs" style={{ color: "#5a6285" }}>Founder — approves, declines, requests changes</div>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2 my-4">
-          <div className="flex-1 h-px" style={{ background: "#dde3ff" }} />
-          <span className="text-[11px]" style={{ color: "#8b93b8" }}>or sign in with email</span>
-          <div className="flex-1 h-px" style={{ background: "#dde3ff" }} />
-        </div>
-
-        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email"
-          placeholder="you@company.com"
-          className="w-full p-2.5 text-sm mb-2 focus:outline-none"
-          style={{ border: `2px solid ${C.ink}`, borderRadius: 6, color: C.ink }} />
-        <select value={pickRole} onChange={(e) => setPickRole(e.target.value)}
-          className="w-full p-2.5 text-sm mb-3 focus:outline-none"
-          style={{ border: `2px solid ${C.ink}`, borderRadius: 6, color: C.ink }}>
-          <option value="manager">I'm the social media manager</option>
-          <option value="client">I'm the founder / client</option>
-        </select>
-        <button onClick={() => onLogin(pickRole)}
-          className="w-full px-4 py-2.5 rounded-md text-sm font-bold focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
-          style={{ background: C.blue, color: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.yellow}` }}>
-          Sign in
-        </button>
-
-        <p className="text-[11px] mt-3 text-center" style={{ color: "#8b93b8" }}>
-          Demo sign-in — real email accounts &amp; passwords arrive with the production build.
-        </p>
+        {children}
       </div>
     </div>
+  );
+}
+
+function Splash() {
+  return (
+    <AuthFrame shadow={C.mint}>
+      <p className="text-sm" style={{ color: "#5a6285" }}>Loading…</p>
+    </AuthFrame>
+  );
+}
+
+function NoAccess({ message }) {
+  return (
+    <AuthFrame shadow={"#ff4d6d"}>
+      <p className="text-sm mb-3" style={{ color: C.ink }}>
+        Signed in, but this account isn't set up in the workspace yet.
+      </p>
+      <p className="text-xs mb-4" style={{ color: "#8b93b8" }}>{message}</p>
+      <button onClick={() => supabase.auth.signOut()}
+        className="w-full px-4 py-2.5 rounded-md text-sm font-bold focus:outline-none active:translate-x-0.5 active:translate-y-0.5"
+        style={{ background: C.blue, color: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.yellow}` }}>
+        Sign out
+      </button>
+    </AuthFrame>
+  );
+}
+
+/* ---------------- sign-in screen ---------------- */
+function Login() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setBusy(false);
+    if (error) setError(error.message);
+  };
+
+  const inputStyle = { border: `2px solid ${C.ink}`, borderRadius: 6, color: C.ink };
+  const labelStyle = { color: "#5a6285" };
+
+  return (
+    <AuthFrame shadow={C.mint}>
+      <form onSubmit={submit}>
+        <label className="block text-xs font-bold mb-1" style={labelStyle}>Email</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required autoComplete="email"
+          placeholder="you@company.com"
+          className="w-full p-2.5 text-sm mb-3 focus:outline-none" style={inputStyle} />
+
+        <label className="block text-xs font-bold mb-1" style={labelStyle}>Password</label>
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required autoComplete="current-password"
+          placeholder="••••••••"
+          className="w-full p-2.5 text-sm mb-3 focus:outline-none" style={inputStyle} />
+
+        {error && <div className="text-xs mb-3" style={{ color: "#b3123a" }}>{error}</div>}
+
+        <button type="submit" disabled={busy}
+          className="w-full px-4 py-2.5 rounded-md text-sm font-bold focus:outline-none active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-60"
+          style={{ background: C.blue, color: C.paper, border: `2px solid ${C.ink}`, boxShadow: `4px 4px 0 ${C.yellow}` }}>
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+    </AuthFrame>
   );
 }
